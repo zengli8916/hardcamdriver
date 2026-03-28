@@ -13,6 +13,8 @@ endif()
 set(SOURCES
     src/main.cpp
     src/VirtualCameraSpoofer.cpp
+    src/SimpleMediaSource.cpp
+    src/SimpleMediaStream.cpp
 )
 
 add_executable(HardCamControl ${SOURCES})
