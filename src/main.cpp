@@ -1,4 +1,10 @@
 #include <windows.h>
+#include <initguid.h>
+#include <ks.h>
+#include <windows.h>
+#include <initguid.h>
+#include <ks.h>
+#include <ksmedia.h>
 #include <mfapi.h>
 #include <mfidl.h>
 #include <mfvirtualcamera.h>
@@ -6,6 +12,7 @@
 #include <string>
 #include "VirtualCameraSpoofer.h"
 #include "SimpleMediaSource.h"
+
 
 #pragma comment(lib, "mf.lib")
 #pragma comment(lib, "mfplat.lib")

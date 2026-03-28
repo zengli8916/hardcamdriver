@@ -1,6 +1,8 @@
 #include "SimpleMediaStream.h"
 #include <mfapi.h>
 #include <mferror.h>
+#include <mferror.h> // Redundant, but just to be sure
+#include <wmcodecdsp.h>
 
 SimpleMediaStream::SimpleMediaStream() : m_isStarted(false), m_frameTimestamp(0) {
     InitializeCriticalSection(&m_critSec);
