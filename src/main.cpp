@@ -4,152 +4,55 @@
 #include <vector>
 #include "VirtualCameraSpoofer.h"
 
-// --- Custom Names and Fundamental Type Definitions to fix missing SDK headers ---
+// VERSION 5.0 - DIRECT REGISTRY INJECTION (NO SWDEVICE API)
 
-#ifndef DEVPROPKEY
-typedef struct _DEVPROPKEY {
-    GUID fmtid;
-    ULONG pid;
-} DEVPROPKEY;
-#endif
-
-#ifndef DEVPROPTYPE
-typedef ULONG DEVPROPTYPE;
-#endif
-
-#ifndef DEVPROP_TYPE_GUID
-#define DEVPROP_TYPE_GUID 0x0000000D
-#endif
-
-typedef enum _HC_SW_DEVICE_CAPABILITIES {
-    HC_SWDeviceCapabilitiesNone = 0x00000000,
-    HC_SWDeviceCapabilitiesRemovable = 0x00000001,
-    HC_SWDeviceCapabilitiesSilentInstall = 0x00000002,
-    HC_SWDeviceCapabilitiesNoDisplayInUI = 0x00000004,
-    HC_SWDeviceCapabilitiesDriverRequired = 0x00000008
-} HC_SW_DEVICE_CAPABILITIES;
-
-typedef struct _HC_SW_DEVICE_CREATE_INFO {
-    ULONG cbSize;
-    PCWSTR pszInstanceId;
-    PCWSTR pszDisplayName;
-    PCWSTR pszzHardwareIds;
-    PCWSTR pszzCompatibleIds;
-    const GUID *pContainerId;
-    ULONG CapabilityFlags;
-    PCWSTR pszDeviceDescription;
-    PCWSTR pszDeviceLocation;
-    const GUID *pSecurityDescriptor;
-} HC_SW_DEVICE_CREATE_INFO;
-
-typedef VOID (WINAPI *HC_SW_DEVICE_CREATE_CALLBACK)(void* hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId);
-
-typedef struct _HC_SW_DEVICE_CREATE_CALLBACK_INFO {
-    ULONG cbSize;
-    HC_SW_DEVICE_CREATE_CALLBACK pfnCallback;
-    PVOID pContext;
-} HC_SW_DEVICE_CREATE_CALLBACK_INFO;
-
-typedef struct _HC_DEVPROPERTY {
-    DEVPROPKEY Key;
-    DEVPROPTYPE Type;
-    ULONG BufferSize;
-    PVOID Buffer;
-} HC_DEVPROPERTY;
-
-// API Function Pointers
-typedef HRESULT (WINAPI *PFN_SwDeviceCreate)(
-    PCWSTR pszEnumeratorName,
-    PCWSTR pszParentDeviceInstance,
-    const HC_SW_DEVICE_CREATE_INFO *pCreateInfo,
-    ULONG cPropertyCount,
-    const HC_DEVPROPERTY *pProperties,
-    const HC_SW_DEVICE_CREATE_CALLBACK_INFO *pCallbackInfo,
-    PVOID pContext,
-    void** phSwDevice
-);
-
-typedef VOID (WINAPI *PFN_SwDeviceClose)(void* hSwDevice);
-
-// --- Global variables ---
-void* g_hSwDevice = NULL;
-HANDLE g_hEvent = NULL;
-
-VOID WINAPI SwDeviceCallback(void* hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId) {
-    if (SUCCEEDED(hr)) {
-        std::wcout << L"[+] Hardware Node Created: " << pszDeviceInstanceId << std::endl;
-        SetEvent(g_hEvent);
-    } else {
-        std::wcerr << L"[-] Failed to create Hardware Node. Error: 0x" << std::hex << hr << std::endl;
+bool CreateDeviceRegistry(const std::wstring& hardwareId, const std::wstring& friendlyName) {
+    HKEY hKey;
+    // We inject directly into the Root enumerator tree
+    std::wstring regPath = L"SYSTEM\\CurrentControlSet\\Enum\\Root\\Camera\\0000";
+    
+    LSTATUS status = RegCreateKeyExW(HKEY_LOCAL_MACHINE, regPath.c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_ALL_ACCESS, NULL, &hKey, NULL);
+    if (status != ERROR_SUCCESS) {
+        std::wcerr << L"Failed to create registry key. Error: " << status << L". Run as Administrator!" << std::endl;
+        return false;
     }
+
+    std::vector<wchar_t> multiSz;
+    multiSz.insert(multiSz.end(), hardwareId.begin(), hardwareId.end());
+    multiSz.push_back(L'\0');
+    multiSz.push_back(L'\0');
+    RegSetValueExW(hKey, L"HardwareID", 0, REG_MULTI_SZ, (BYTE*)multiSz.data(), (DWORD)(multiSz.size() * sizeof(wchar_t)));
+    RegSetValueExW(hKey, L"DeviceDesc", 0, REG_SZ, (BYTE*)friendlyName.c_str(), (DWORD)((friendlyName.length() + 1) * sizeof(wchar_t)));
+    RegSetValueExW(hKey, L"FriendlyName", 0, REG_SZ, (BYTE*)friendlyName.c_str(), (DWORD)((friendlyName.length() + 1) * sizeof(wchar_t)));
+
+    std::wstring classGuid = L"{69965BE0-5081-11CF-B843-0020AF06AD54}";
+    RegSetValueExW(hKey, L"Class", 0, REG_SZ, (BYTE*)L"Camera", (DWORD)((6 + 1) * sizeof(wchar_t)));
+    RegSetValueExW(hKey, L"ClassGUID", 0, REG_SZ, (BYTE*)classGuid.c_str(), (DWORD)((classGuid.length() + 1) * sizeof(wchar_t)));
+
+    DWORD caps = 0x84;
+    RegSetValueExW(hKey, L"Capabilities", 0, REG_DWORD, (BYTE*)&caps, sizeof(DWORD));
+
+    RegCloseKey(hKey);
+    return true;
 }
 
 int main() {
     std::wcout << L"========================================" << std::endl;
-    std::wcout << L"   HardCam (PnP Simulation 4.0)        " << std::endl;
+    std::wcout << L"   HardCam (Direct Root Injection 5.0) " << std::endl;
     std::wcout << L"========================================" << std::endl;
 
-    HMODULE hCfgMgr = LoadLibraryW(L"cfgmgr32.dll");
-    if (!hCfgMgr) {
-        std::wcerr << L"Failed to load cfgmgr32.dll" << std::endl;
-        return 1;
-    }
+    std::wstring hardwareId = L"USB\\VID_046D&PID_082D";
+    std::wstring friendlyName = L"Logitech HD Pro Webcam C920";
 
-    auto pfnSwDeviceCreate = (PFN_SwDeviceCreate)GetProcAddress(hCfgMgr, "SwDeviceCreate");
-    auto pfnSwDeviceClose = (PFN_SwDeviceClose)GetProcAddress(hCfgMgr, "SwDeviceClose");
-
-    if (!pfnSwDeviceCreate || !pfnSwDeviceClose) {
-        std::wcerr << L"SwDevice APIs not found in this Windows version." << std::endl;
-        return 1;
-    }
-
-    g_hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-
-    HC_SW_DEVICE_CREATE_INFO createInfo = {0};
-    createInfo.cbSize = sizeof(createInfo);
-    createInfo.pszInstanceId = L"HardCam_Logitech_C920";
-    createInfo.pszzHardwareIds = L"USB\\VID_046D&PID_082D\0USB\\VID_046D&PID_082D&REV_2901\0";
-    createInfo.pszDeviceDescription = L"Logitech HD Pro Webcam C920";
-    createInfo.CapabilityFlags = HC_SWDeviceCapabilitiesRemovable | HC_SWDeviceCapabilitiesSilentInstall;
-
-    HC_SW_DEVICE_CREATE_CALLBACK_INFO callbackInfo = {0};
-    callbackInfo.cbSize = sizeof(callbackInfo);
-    callbackInfo.pfnCallback = (HC_SW_DEVICE_CREATE_CALLBACK)SwDeviceCallback;
-
-    HC_DEVPROPERTY props[1];
-    
-    // DEVPKEY_Device_ClassGuid: {43675d81-51ef-4920-ad22-6e52a35a4ebe}, 1
-    DEVPROPKEY keyClassGuid;
-    keyClassGuid.fmtid = { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } };
-    keyClassGuid.pid = 1;
-
-    // KSCATEGORY_VIDEO_CAMERA: {69965BE0-5081-11CF-B843-0020AF06AD54}
-    GUID guidVideoCamera = { 0x69965BE0, 0x5081, 0x11CF, { 0xB8, 0x43, 0x00, 0x20, 0xAF, 0x06, 0xAD, 0x54 } };
-
-    props[0].Key = keyClassGuid;
-    props[0].Type = (DEVPROPTYPE)DEVPROP_TYPE_GUID;
-    props[0].BufferSize = sizeof(GUID);
-    props[0].Buffer = (PVOID)&guidVideoCamera;
-
-    std::wcout << L"Registering Hardware Simulation..." << std::endl;
-
-    HRESULT hr = pfnSwDeviceCreate(L"HTRMgr", NULL, &createInfo, 1, props, &callbackInfo, NULL, &g_hSwDevice);
-
-    if (SUCCEEDED(hr)) {
-        WaitForSingleObject(g_hEvent, 10000);
-        
-        std::wstring fakeInstance = L"SWD\\HTRMgr\\HardCam_Logitech_C920";
-        VirtualCameraSpoofer::SpoofRegistry(fakeInstance);
-
-        std::wcout << L"\n[!] SUCCESS: Hardware C920 is now VISIBLE." << std::endl;
+    if (CreateDeviceRegistry(hardwareId, friendlyName)) {
+        std::wcout << L"[+] Hardware registration injected successfully." << std::endl;
+        VirtualCameraSpoofer::SpoofRegistry(L"Root\\Camera\\0000");
+        std::wcout << L"\n[!] SUCCESS: Hardware C920 injected." << std::endl;
         std::wcout << L"Press ENTER to exit..." << std::endl;
-        
         std::cin.get();
-        pfnSwDeviceClose(g_hSwDevice);
     } else {
-        std::wcerr << L"Failed. Error: 0x" << std::hex << hr << std::endl;
+        std::wcerr << L"Failed. Ensure you are using Administrator privileges." << std::endl;
     }
 
-    CloseHandle(g_hEvent);
     return 0;
 }
