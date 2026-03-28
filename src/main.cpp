@@ -1,9 +1,6 @@
 #include <windows.h>
 #include <initguid.h>
 #include <ks.h>
-#include <windows.h>
-#include <initguid.h>
-#include <ks.h>
 #include <ksmedia.h>
 #include <mfapi.h>
 #include <mfidl.h>
@@ -13,11 +10,22 @@
 #include "VirtualCameraSpoofer.h"
 #include "SimpleMediaSource.h"
 
-
 #pragma comment(lib, "mf.lib")
 #pragma comment(lib, "mfplat.lib")
 #pragma comment(lib, "mfuuid.lib")
 #pragma comment(lib, "mfreadwrite.lib")
+
+// Define the function pointer type for MFCreateVirtualCamera
+typedef HRESULT (STDAPICALLTYPE *PFN_MFCreateVirtualCamera)(
+    MFVirtualCameraType type,
+    MFVirtualCameraLifetime lifetime,
+    MFVirtualCameraAccess access,
+    LPCWSTR friendlyName,
+    LPCWSTR sourceId,
+    const GUID* categories,
+    ULONG categoryCount,
+    IMFVirtualCamera** ppVirtualCamera
+);
 
 int main() {
     std::wcout << L"========================================" << std::endl;
@@ -31,45 +39,55 @@ int main() {
     HRESULT hr = MFStartup(MF_VERSION);
     if (FAILED(hr)) return 1;
 
-    // 1. Initialize our custom media source with the local file
-    ComPtr<SimpleMediaSource> pSource = Make<SimpleMediaSource>();
-    hr = pSource->Initialize(videoPath);
-    if (FAILED(hr)) {
-        std::wcerr << L"Failed to initialize media source with file: " << videoPath << std::endl;
+    // Load mfplat.dll dynamically to get MFCreateVirtualCamera
+    HMODULE hMfPlat = GetModuleHandleW(L"mfplat.dll");
+    if (!hMfPlat) hMfPlat = LoadLibraryW(L"mfplat.dll");
+    
+    if (!hMfPlat) {
+        std::wcerr << L"Failed to load mfplat.dll" << std::endl;
         return 1;
     }
 
-    // 2. Register Virtual Camera
+    auto pfnMFCreateVirtualCamera = (PFN_MFCreateVirtualCamera)GetProcAddress(hMfPlat, "MFCreateVirtualCamera");
+    if (!pfnMFCreateVirtualCamera) {
+        std::wcerr << L"Critical Error: MFCreateVirtualCamera API NOT FOUND." << std::endl;
+        std::wcerr << L"This usually means you are NOT running on Windows 11." << std::endl;
+        return 1;
+    }
+
+    ComPtr<SimpleMediaSource> pSource = Make<SimpleMediaSource>();
+    hr = pSource->Initialize(videoPath);
+    if (FAILED(hr)) {
+        std::wcerr << L"Failed to initialize media source." << std::endl;
+        return 1;
+    }
+
     IMFVirtualCamera* pVirtualCamera = nullptr;
     const GUID categories[] = { KSCATEGORY_VIDEO_CAMERA };
     
-    hr = MFCreateVirtualCamera(
+    // Call the function via pointer
+    hr = pfnMFCreateVirtualCamera(
         MFVirtualCameraType_SoftwareCameraSource,
         MFVirtualCameraLifetime_Session,
         MFVirtualCameraAccess_CurrentUser,
-        L"Logitech HD Pro Webcam C920", // Friendly Name Spoofing
-        L"usb#vid_046d&pid_082d",       // Base ID
+        L"Logitech HD Pro Webcam C920",
+        L"usb#vid_046d&pid_082d",
         categories,
         1,
         &pVirtualCamera
     );
 
     if (SUCCEEDED(hr) && pVirtualCamera) {
-        // Here we'd normally register our SimpleMediaSource as a COM object in the system
-        // and pass its CLSID via AddDeviceSourceInfo. 
-        // For session-based cameras, the system will use the source we provide.
-        
         hr = pVirtualCamera->Start(nullptr);
         if (SUCCEEDED(hr)) {
             std::wcout << L"[+] Virtual Camera Started." << std::endl;
             
-            // 3. Deep Registry Spoofing to bypass TikTok Live Studio
-            // In a real scenario, we'd query the actual symlink from the system
+            // Note: In real scenarios, query the actual symlink. 
+            // This is a placeholder for the spoofing logic.
             std::wstring fakeSymlink = L"\\\\?\\swd#mfvirtualcam#{e5323777-f976-4f5b-9b55-b94699c46e44}#usb#vid_046d&pid_082d";
             VirtualCameraSpoofer::SpoofRegistry(fakeSymlink);
 
-            std::wcout << L"\n[!] SUCCESS: Camera is active and spoofed as physical Logitech C920." << std::endl;
-            std::wcout << L"Now open TikTok Live Studio and look for 'Logitech HD Pro Webcam C920'." << std::endl;
+            std::wcout << L"\n[!] SUCCESS: Camera is active." << std::endl;
             std::wcout << L"Press ENTER to stop..." << std::endl;
             std::cin.get();
 
@@ -77,7 +95,7 @@ int main() {
         }
         pVirtualCamera->Release();
     } else {
-        std::wcerr << L"Failed to create Virtual Camera. Error: " << std::hex << hr << std::endl;
+        std::wcerr << L"Failed to create Virtual Camera. Error: 0x" << std::hex << hr << std::endl;
     }
 
     MFShutdown();
