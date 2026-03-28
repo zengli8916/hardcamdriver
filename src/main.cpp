@@ -1,77 +1,117 @@
 #include <windows.h>
+#include <swdevice.h>
 #include <initguid.h>
 #include <ks.h>
 #include <ksmedia.h>
-#include <mfapi.h>
-#include <mfidl.h>
 #include <iostream>
 #include <string>
+#include <vector>
 #include "VirtualCameraSpoofer.h"
-#include "SimpleMediaSource.h"
 
-// Note: In compatibility mode, we manually register the device in registry 
-// instead of using Win11 MFCreateVirtualCamera API.
+// Define function pointers for SwDevice API to avoid linker errors
+typedef HRESULT (WINAPI *PFN_SwDeviceCreate)(
+    PCWSTR pszEnumeratorName,
+    PCWSTR pszParentDeviceInstance,
+    const SW_DEVICE_CREATE_INFO *pCreateInfo,
+    ULONG cPropertyCount,
+    const DEVPROPERTY *pProperties,
+    const SW_DEVICE_CREATE_CALLBACK_INFO *pCallbackInfo,
+    PVOID pContext,
+    PHSWDEVICE phSwDevice
+);
 
-#pragma comment(lib, "mf.lib")
-#pragma comment(lib, "mfplat.lib")
-#pragma comment(lib, "mfuuid.lib")
-#pragma comment(lib, "mfreadwrite.lib")
+typedef VOID (WINAPI *PFN_SwDeviceClose)(HSWDEVICE hSwDevice);
 
-// Manual device registration logic for systems without Win11 Virtual Camera API
-bool RegisterVirtualCamera(const std::wstring& friendlyName) {
-    // This creates a standard video capture device node in the registry
-    // that TikTok Live Studio will pick up as a hardware device.
-    HKEY hKey;
-    std::wstring regPath = L"SOFTWARE\\Microsoft\\Windows Media Foundation\\Platform\\VirtualCamera";
-    
-    if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, regPath.c_str(), 0, NULL, REG_OPTION_NON_VOLATILE, KEY_WRITE, NULL, &hKey, NULL) == ERROR_SUCCESS) {
-        RegSetValueExW(hKey, L"FriendlyName", 0, REG_SZ, (BYTE*)friendlyName.c_str(), (DWORD)((friendlyName.length() + 1) * sizeof(wchar_t)));
-        RegCloseKey(hKey);
-        return true;
+// Global to hold the device handle
+HSWDEVICE g_hSwDevice = NULL;
+HANDLE g_hEvent = NULL;
+
+VOID WINAPI SwDeviceCallback(HSWDEVICE hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId) {
+    if (SUCCEEDED(hr)) {
+        std::wcout << L"[+] Hardware Node Created: " << pszDeviceInstanceId << std::endl;
+        SetEvent(g_hEvent);
+    } else {
+        std::wcerr << L"[-] Failed to create Hardware Node. Error: 0x" << std::hex << hr << std::endl;
     }
-    return false;
 }
 
 int main() {
     std::wcout << L"========================================" << std::endl;
-    std::wcout << L"   HardCam (Compatibility Mode)        " << std::endl;
+    std::wcout << L"   HardCam (PnP Simulation Mode)       " << std::endl;
     std::wcout << L"========================================" << std::endl;
-    
-    std::wstring videoPath;
-    std::wcout << L"Enter full path to local MP4/AVI file: ";
-    std::getline(std::wcin, videoPath);
 
-    if (videoPath.front() == L'\"' && videoPath.back() == L'\"') {
-        videoPath = videoPath.substr(1, videoPath.length() - 2);
+    // 1. Load CfgMgr32.dll for SwDevice API
+    HMODULE hCfgMgr = LoadLibraryW(L"cfgmgr32.dll");
+    if (!hCfgMgr) {
+        std::wcerr << L"Failed to load cfgmgr32.dll" << std::endl;
+        return 1;
     }
 
-    HRESULT hr = MFStartup(MF_VERSION);
-    if (FAILED(hr)) return 1;
+    auto pfnSwDeviceCreate = (PFN_SwDeviceCreate)GetProcAddress(hCfgMgr, "SwDeviceCreate");
+    auto pfnSwDeviceClose = (PFN_SwDeviceClose)GetProcAddress(hCfgMgr, "SwDeviceClose");
 
-    std::wstring friendlyName = L"Logitech HD Pro Webcam C920";
+    if (!pfnSwDeviceCreate || !pfnSwDeviceClose) {
+        std::wcerr << L"SwDevice APIs not found in this Windows version." << std::endl;
+        return 1;
+    }
+
+    g_hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
+
+    // 2. Prepare Device Identity (The Spoofing Core)
+    SW_DEVICE_CREATE_INFO createInfo = {0};
+    createInfo.cbSize = sizeof(createInfo);
+    createInfo.pszInstanceId = L"HardCam_Logitech_C920";
     
-    // Fallback to manual registration since the API is missing
-    std::wcout << L"Win11 API missing. Falling back to manual hardware registration..." << std::endl;
-    
-    if (RegisterVirtualCamera(friendlyName)) {
-        std::wcout << L"[+] Manual device registration completed." << std::endl;
+    // This is what makes it look like a real USB camera to the system
+    const wchar_t* hardwareIds = L"USB\\VID_046D&PID_082D\0USB\\VID_046D&PID_082D&REV_2901\0";
+    createInfo.pszzHardwareIds = hardwareIds;
+    createInfo.pszDeviceDescription = L"Logitech HD Pro Webcam C920";
+    createInfo.CapabilityFlags = SWDeviceCapabilitiesRemovable | SWDeviceCapabilitiesSilentInstall;
+
+    SW_DEVICE_CREATE_CALLBACK_INFO callbackInfo = {0};
+    callbackInfo.cbSize = sizeof(callbackInfo);
+    callbackInfo.pfnCallback = SwDeviceCallback;
+
+    // 3. Set Device Class (Video Camera)
+    DEVPROPERTY props[1];
+    DEVPROPKEY keyClassGuid = { { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } }, 1 }; // DEVPKEY_Device_ClassGuid
+    props[0].Key = keyClassGuid;
+    props[0].Type = DEVPROP_TYPE_GUID;
+    props[0].BufferSize = sizeof(GUID);
+    props[0].Buffer = (PVOID)&KSCATEGORY_VIDEO_CAMERA;
+
+    std::wcout << L"Registering Hardware Simulation..." << std::endl;
+
+    HRESULT hr = pfnSwDeviceCreate(
+        L"HTRMgr", 
+        NULL, 
+        &createInfo, 
+        1, 
+        props, 
+        &callbackInfo, 
+        NULL, 
+        &g_hSwDevice
+    );
+
+    if (SUCCEEDED(hr)) {
+        WaitForSingleObject(g_hEvent, 10000);
         
-        // Apply deep hardware spoofing
-        // This is where we inject the 0x84 capabilities and VID/PID
-        std::wstring fakeSymlink = L"\\\\?\\swd#mfvirtualcam#{e5323777-f976-4f5b-9b55-b94699c46e44}#usb#vid_046d&pid_082d";
-        VirtualCameraSpoofer::SpoofRegistry(fakeSymlink);
+        std::wcout << L"[+] Device successfully injected into PnP tree." << std::endl;
         
-        std::wcout << L"\n[!] SUCCESS: Camera registered and spoofed." << std::endl;
-        std::wcout << L"Please try locating '" << friendlyName << L"' in TikTok Live Studio." << std::endl;
-        std::wcout << L"Press ENTER to stop..." << std::endl;
+        // Final Spoof: Inject the 0x84 Capabilities into the newly created node
+        std::wstring fakeInstance = L"SWD\\HTRMgr\\HardCam_Logitech_C920";
+        VirtualCameraSpoofer::SpoofRegistry(fakeInstance);
+
+        std::wcout << L"\n[!] SUCCESS: Check Device Manager -> Cameras." << std::endl;
+        std::wcout << L"The system now sees a REAL Logitech C920 connected via USB." << std::endl;
+        std::wcout << L"Press ENTER to disconnect and cleanup..." << std::endl;
         
-        // In this mode, the stream logic will need a registered MFT (Media Foundation Transform)
-        // For testing, we keep the process alive.
         std::cin.get();
+        pfnSwDeviceClose(g_hSwDevice);
     } else {
-        std::wcerr << L"Failed to register device. Run as Administrator." << std::endl;
+        std::wcerr << L"Failed to create SwDevice. Error: 0x" << std::hex << hr << std::endl;
     }
 
-    MFShutdown();
+    CloseHandle(g_hEvent);
     return 0;
 }
