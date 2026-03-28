@@ -1,32 +1,66 @@
 #include <windows.h>
-#include <swdevice.h>
-#include <initguid.h>
-#include <ks.h>
-#include <ksmedia.h>
 #include <iostream>
 #include <string>
 #include <vector>
 #include "VirtualCameraSpoofer.h"
 
-// Define function pointers for SwDevice API to avoid linker errors
+// --- Custom Names to avoid any collision with existing/partial SDK headers ---
+
+typedef enum _HC_SW_DEVICE_CAPABILITIES {
+    HC_SWDeviceCapabilitiesNone = 0x00000000,
+    HC_SWDeviceCapabilitiesRemovable = 0x00000001,
+    HC_SWDeviceCapabilitiesSilentInstall = 0x00000002,
+    HC_SWDeviceCapabilitiesNoDisplayInUI = 0x00000004,
+    HC_SWDeviceCapabilitiesDriverRequired = 0x00000008
+} HC_SW_DEVICE_CAPABILITIES;
+
+typedef struct _HC_SW_DEVICE_CREATE_INFO {
+    ULONG cbSize;
+    PCWSTR pszInstanceId;
+    PCWSTR pszDisplayName;
+    PCWSTR pszzHardwareIds;
+    PCWSTR pszzCompatibleIds;
+    const GUID *pContainerId;
+    ULONG CapabilityFlags;
+    PCWSTR pszDeviceDescription;
+    PCWSTR pszDeviceLocation;
+    const GUID *pSecurityDescriptor;
+} HC_SW_DEVICE_CREATE_INFO;
+
+typedef VOID (WINAPI *HC_SW_DEVICE_CREATE_CALLBACK)(void* hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId);
+
+typedef struct _HC_SW_DEVICE_CREATE_CALLBACK_INFO {
+    ULONG cbSize;
+    HC_SW_DEVICE_CREATE_CALLBACK pfnCallback;
+    PVOID pContext;
+} HC_SW_DEVICE_CREATE_CALLBACK_INFO;
+
+typedef struct _HC_DEVPROPERTY {
+    DEVPROPKEY Key;
+    DEVPROPTYPE Type;
+    ULONG BufferSize;
+    PVOID Buffer;
+} HC_DEVPROPERTY;
+
+// API Function Pointers
 typedef HRESULT (WINAPI *PFN_SwDeviceCreate)(
     PCWSTR pszEnumeratorName,
     PCWSTR pszParentDeviceInstance,
-    const SW_DEVICE_CREATE_INFO *pCreateInfo,
+    const HC_SW_DEVICE_CREATE_INFO *pCreateInfo,
     ULONG cPropertyCount,
-    const DEVPROPERTY *pProperties,
-    const SW_DEVICE_CREATE_CALLBACK_INFO *pCallbackInfo,
+    const HC_DEVPROPERTY *pProperties,
+    const HC_SW_DEVICE_CREATE_CALLBACK_INFO *pCallbackInfo,
     PVOID pContext,
-    PHSWDEVICE phSwDevice
+    void** phSwDevice
 );
 
-typedef VOID (WINAPI *PFN_SwDeviceClose)(HSWDEVICE hSwDevice);
+typedef VOID (WINAPI *PFN_SwDeviceClose)(void* hSwDevice);
 
-// Global to hold the device handle
-HSWDEVICE g_hSwDevice = NULL;
+// --- Global variables ---
+void* g_hSwDevice = NULL;
 HANDLE g_hEvent = NULL;
 
-VOID WINAPI SwDeviceCallback(HSWDEVICE hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId) {
+VOID WINAPI SwDeviceCallback(void* hSwDevice, HRESULT hr, PVOID pContext, PCWSTR pszDeviceInstanceId) {
     if (SUCCEEDED(hr)) {
         std::wcout << L"[+] Hardware Node Created: " << pszDeviceInstanceId << std::endl;
         SetEvent(g_hEvent);
@@ -37,10 +71,9 @@ VOID WINAPI SwDeviceCallback(HSWDEVICE hSwDevice, HRESULT hr, PVOID pContext, PC
 
 int main() {
     std::wcout << L"========================================" << std::endl;
-    std::wcout << L"   HardCam (PnP Simulation Mode)       " << std::endl;
+    std::wcout << L"   HardCam (Robust PnP Mode 3.0)       " << std::endl;
     std::wcout << L"========================================" << std::endl;
 
-    // 1. Load CfgMgr32.dll for SwDevice API
     HMODULE hCfgMgr = LoadLibraryW(L"cfgmgr32.dll");
     if (!hCfgMgr) {
         std::wcerr << L"Failed to load cfgmgr32.dll" << std::endl;
@@ -57,59 +90,45 @@ int main() {
 
     g_hEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
 
-    // 2. Prepare Device Identity (The Spoofing Core)
-    SW_DEVICE_CREATE_INFO createInfo = {0};
+    HC_SW_DEVICE_CREATE_INFO createInfo = {0};
     createInfo.cbSize = sizeof(createInfo);
     createInfo.pszInstanceId = L"HardCam_Logitech_C920";
-    
-    // This is what makes it look like a real USB camera to the system
-    const wchar_t* hardwareIds = L"USB\\VID_046D&PID_082D\0USB\\VID_046D&PID_082D&REV_2901\0";
-    createInfo.pszzHardwareIds = hardwareIds;
+    createInfo.pszzHardwareIds = L"USB\\VID_046D&PID_082D\0USB\\VID_046D&PID_082D&REV_2901\0";
     createInfo.pszDeviceDescription = L"Logitech HD Pro Webcam C920";
-    createInfo.CapabilityFlags = SWDeviceCapabilitiesRemovable | SWDeviceCapabilitiesSilentInstall;
+    createInfo.CapabilityFlags = HC_SWDeviceCapabilitiesRemovable | HC_SWDeviceCapabilitiesSilentInstall;
 
-    SW_DEVICE_CREATE_CALLBACK_INFO callbackInfo = {0};
+    HC_SW_DEVICE_CREATE_CALLBACK_INFO callbackInfo = {0};
     callbackInfo.cbSize = sizeof(callbackInfo);
-    callbackInfo.pfnCallback = SwDeviceCallback;
+    callbackInfo.pfnCallback = (HC_SW_DEVICE_CREATE_CALLBACK)SwDeviceCallback;
 
-    // 3. Set Device Class (Video Camera)
-    DEVPROPERTY props[1];
-    DEVPROPKEY keyClassGuid = { { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } }, 1 }; // DEVPKEY_Device_ClassGuid
+    HC_DEVPROPERTY props[1];
+    // DEVPKEY_Device_ClassGuid
+    DEVPROPKEY keyClassGuid = { { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } }, 1 }; 
+    // KSCATEGORY_VIDEO_CAMERA: {69965BE0-5081-11CF-B843-0020AF06AD54}
+    GUID guidVideoCamera = { 0x69965BE0, 0x5081, 0x11CF, { 0xB8, 0x43, 0x00, 0x20, 0xAF, 0x06, 0xAD, 0x54 } };
+
     props[0].Key = keyClassGuid;
     props[0].Type = DEVPROP_TYPE_GUID;
     props[0].BufferSize = sizeof(GUID);
-    props[0].Buffer = (PVOID)&KSCATEGORY_VIDEO_CAMERA;
+    props[0].Buffer = (PVOID)&guidVideoCamera;
 
     std::wcout << L"Registering Hardware Simulation..." << std::endl;
 
-    HRESULT hr = pfnSwDeviceCreate(
-        L"HTRMgr", 
-        NULL, 
-        &createInfo, 
-        1, 
-        props, 
-        &callbackInfo, 
-        NULL, 
-        &g_hSwDevice
-    );
+    HRESULT hr = pfnSwDeviceCreate(L"HTRMgr", NULL, &createInfo, 1, props, &callbackInfo, NULL, &g_hSwDevice);
 
     if (SUCCEEDED(hr)) {
         WaitForSingleObject(g_hEvent, 10000);
         
-        std::wcout << L"[+] Device successfully injected into PnP tree." << std::endl;
-        
-        // Final Spoof: Inject the 0x84 Capabilities into the newly created node
         std::wstring fakeInstance = L"SWD\\HTRMgr\\HardCam_Logitech_C920";
         VirtualCameraSpoofer::SpoofRegistry(fakeInstance);
 
-        std::wcout << L"\n[!] SUCCESS: Check Device Manager -> Cameras." << std::endl;
-        std::wcout << L"The system now sees a REAL Logitech C920 connected via USB." << std::endl;
-        std::wcout << L"Press ENTER to disconnect and cleanup..." << std::endl;
+        std::wcout << L"\n[!] SUCCESS: Hardware C920 is now VISIBLE." << std::endl;
+        std::wcout << L"Press ENTER to exit..." << std::endl;
         
         std::cin.get();
         pfnSwDeviceClose(g_hSwDevice);
     } else {
-        std::wcerr << L"Failed to create SwDevice. Error: 0x" << std::hex << hr << std::endl;
+        std::wcerr << L"Failed. Error: 0x" << std::hex << hr << std::endl;
     }
 
     CloseHandle(g_hEvent);
