@@ -15,7 +15,6 @@
 #pragma comment(lib, "mfuuid.lib")
 #pragma comment(lib, "mfreadwrite.lib")
 
-// Define the function pointer type for MFCreateVirtualCamera
 typedef HRESULT (STDAPICALLTYPE *PFN_MFCreateVirtualCamera)(
     MFVirtualCameraType type,
     MFVirtualCameraLifetime lifetime,
@@ -36,36 +35,47 @@ int main() {
     std::wcout << L"Enter full path to local MP4/AVI file: ";
     std::getline(std::wcin, videoPath);
 
+    // Remove quotes if the user pasted the path with them
+    if (videoPath.front() == L'\"' && videoPath.back() == L'\"') {
+        videoPath = videoPath.substr(1, videoPath.length() - 2);
+    }
+
     HRESULT hr = MFStartup(MF_VERSION);
     if (FAILED(hr)) return 1;
 
-    // Load mfplat.dll dynamically to get MFCreateVirtualCamera
-    HMODULE hMfPlat = GetModuleHandleW(L"mfplat.dll");
-    if (!hMfPlat) hMfPlat = LoadLibraryW(L"mfplat.dll");
-    
-    if (!hMfPlat) {
-        std::wcerr << L"Failed to load mfplat.dll" << std::endl;
-        return 1;
-    }
+    // Try loading from mfplat.dll first, then mf.dll
+    HMODULE hModules[] = { 
+        GetModuleHandleW(L"mfplat.dll"), 
+        LoadLibraryW(L"mfplat.dll"), 
+        GetModuleHandleW(L"mf.dll"), 
+        LoadLibraryW(L"mf.dll") 
+    };
 
-    auto pfnMFCreateVirtualCamera = (PFN_MFCreateVirtualCamera)GetProcAddress(hMfPlat, "MFCreateVirtualCamera");
+    PFN_MFCreateVirtualCamera pfnMFCreateVirtualCamera = nullptr;
+    for (auto hMod : hModules) {
+        if (hMod) {
+            pfnMFCreateVirtualCamera = (PFN_MFCreateVirtualCamera)GetProcAddress(hMod, "MFCreateVirtualCamera");
+            if (pfnMFCreateVirtualCamera) break;
+        }
+    }
+    
     if (!pfnMFCreateVirtualCamera) {
-        std::wcerr << L"Critical Error: MFCreateVirtualCamera API NOT FOUND." << std::endl;
-        std::wcerr << L"This usually means you are NOT running on Windows 11." << std::endl;
+        std::wcerr << L"Critical Error: MFCreateVirtualCamera API NOT FOUND in mfplat.dll or mf.dll." << std::endl;
+        std::wcerr << L"This machine might not support the Win11 Virtual Camera API." << std::endl;
+        std::wcerr << L"Please ensure you are on Windows 11 (Build 22000+) and Media Feature Pack is installed." << std::endl;
         return 1;
     }
 
     ComPtr<SimpleMediaSource> pSource = Make<SimpleMediaSource>();
     hr = pSource->Initialize(videoPath);
     if (FAILED(hr)) {
-        std::wcerr << L"Failed to initialize media source." << std::endl;
+        std::wcerr << L"Failed to initialize media source. Error: 0x" << std::hex << hr << std::endl;
         return 1;
     }
 
     IMFVirtualCamera* pVirtualCamera = nullptr;
     const GUID categories[] = { KSCATEGORY_VIDEO_CAMERA };
     
-    // Call the function via pointer
     hr = pfnMFCreateVirtualCamera(
         MFVirtualCameraType_SoftwareCameraSource,
         MFVirtualCameraLifetime_Session,
@@ -82,8 +92,7 @@ int main() {
         if (SUCCEEDED(hr)) {
             std::wcout << L"[+] Virtual Camera Started." << std::endl;
             
-            // Note: In real scenarios, query the actual symlink. 
-            // This is a placeholder for the spoofing logic.
+            // Note: Update with real device symlink if possible
             std::wstring fakeSymlink = L"\\\\?\\swd#mfvirtualcam#{e5323777-f976-4f5b-9b55-b94699c46e44}#usb#vid_046d&pid_082d";
             VirtualCameraSpoofer::SpoofRegistry(fakeSymlink);
 
