@@ -4,7 +4,22 @@
 #include <vector>
 #include "VirtualCameraSpoofer.h"
 
-// --- Custom Names to avoid any collision with existing/partial SDK headers ---
+// --- Custom Names and Fundamental Type Definitions to fix missing SDK headers ---
+
+#ifndef DEVPROPKEY
+typedef struct _DEVPROPKEY {
+    GUID fmtid;
+    ULONG pid;
+} DEVPROPKEY;
+#endif
+
+#ifndef DEVPROPTYPE
+typedef ULONG DEVPROPTYPE;
+#endif
+
+#ifndef DEVPROP_TYPE_GUID
+#define DEVPROP_TYPE_GUID 0x0000000D
+#endif
 
 typedef enum _HC_SW_DEVICE_CAPABILITIES {
     HC_SWDeviceCapabilitiesNone = 0x00000000,
@@ -71,7 +86,7 @@ VOID WINAPI SwDeviceCallback(void* hSwDevice, HRESULT hr, PVOID pContext, PCWSTR
 
 int main() {
     std::wcout << L"========================================" << std::endl;
-    std::wcout << L"   HardCam (Robust PnP Mode 3.0)       " << std::endl;
+    std::wcout << L"   HardCam (PnP Simulation 4.0)        " << std::endl;
     std::wcout << L"========================================" << std::endl;
 
     HMODULE hCfgMgr = LoadLibraryW(L"cfgmgr32.dll");
@@ -102,13 +117,17 @@ int main() {
     callbackInfo.pfnCallback = (HC_SW_DEVICE_CREATE_CALLBACK)SwDeviceCallback;
 
     HC_DEVPROPERTY props[1];
-    // DEVPKEY_Device_ClassGuid
-    DEVPROPKEY keyClassGuid = { { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } }, 1 }; 
+    
+    // DEVPKEY_Device_ClassGuid: {43675d81-51ef-4920-ad22-6e52a35a4ebe}, 1
+    DEVPROPKEY keyClassGuid;
+    keyClassGuid.fmtid = { 0x43675d81, 0x51ef, 0x4920, { 0xad, 0x22, 0x6e, 0x52, 0xa3, 0x5a, 0x4e, 0xbe } };
+    keyClassGuid.pid = 1;
+
     // KSCATEGORY_VIDEO_CAMERA: {69965BE0-5081-11CF-B843-0020AF06AD54}
     GUID guidVideoCamera = { 0x69965BE0, 0x5081, 0x11CF, { 0xB8, 0x43, 0x00, 0x20, 0xAF, 0x06, 0xAD, 0x54 } };
 
     props[0].Key = keyClassGuid;
-    props[0].Type = DEVPROP_TYPE_GUID;
+    props[0].Type = (DEVPROPTYPE)DEVPROP_TYPE_GUID;
     props[0].BufferSize = sizeof(GUID);
     props[0].Buffer = (PVOID)&guidVideoCamera;
 
