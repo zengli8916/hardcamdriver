@@ -1,8 +1,12 @@
 #include "SimpleMediaStream.h"
 #include <mfapi.h>
+#include <mfidl.h>
 #include <mferror.h>
-#include <mferror.h> // Redundant, but just to be sure
-#include <wmcodecdsp.h>
+
+// If mferror.h doesn't define it in some SDK versions, define it here.
+#ifndef MF_E_STREAMSINK_STOPPED
+#define MF_E_STREAMSINK_STOPPED ((HRESULT)0xC00D4E02L)
+#endif
 
 SimpleMediaStream::SimpleMediaStream() : m_isStarted(false), m_frameTimestamp(0) {
     InitializeCriticalSection(&m_critSec);
@@ -81,8 +85,7 @@ HRESULT SimpleMediaStream::DeliverSample() {
     if (SUCCEEDED(hr) && pSample) {
         pSample->SetSampleTime(m_frameTimestamp);
         m_frameTimestamp += 333333; // ~30 FPS (1 tick = 100ns)
-        QueueEvent(MEMediaSample, GUID_NULL, S_OK, (PROPVARIANT*)nullptr); // Simple event to notify
-        // Real implementation would pass the sample in the event, but for briefity:
+        QueueEvent(MEMediaSample, GUID_NULL, S_OK, (PROPVARIANT*)nullptr);
         m_pEventQueue->QueueEventParamUnk(MEMediaSample, GUID_NULL, S_OK, pSample.Get());
     }
     return hr;
