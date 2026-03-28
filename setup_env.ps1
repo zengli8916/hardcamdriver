@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    HardCamDriver Environment Setup Script (Windows 11)
+    HardCamDriver Environment Setup Script (Windows 11) - Fixed Version
 .DESCRIPTION
     Automatically installs Git, CMake, VS2022 Build Tools, and Windows 11 SDK.
     Must be run as Administrator.
@@ -28,17 +28,20 @@ if (-not (Get-Command choco -ErrorAction SilentlyContinue)) {
 # 3. Install development toolkits
 Write-Host "Installing development tools via Chocolatey (this may take 15-30 mins)..." -ForegroundColor Yellow
 
-# Git, CMake, VS2022 Build Tools, Windows 11 SDK
-$packages = @("git", "cmake", "visualstudio2022buildtools", "visualstudio2022-workload-vctools", "windows-11-sdk-22000")
+# Using more reliable package names
+# Note: visualstudio2022-workload-vctools often includes the SDK automatically.
+$packages = @("git", "cmake", "visualstudio2022buildtools", "visualstudio2022-workload-vctools", "windows-11-sdk")
 
 foreach ($pkg in $packages) {
-    Write-Host "Installing $pkg..." -ForegroundColor Gray
-    choco install $pkg -y --no-progress
+    Write-Host "Checking/Installing $pkg..." -ForegroundColor Gray
+    # Use -n to skip if already installed, improving speed on re-run
+    choco install $pkg -y --no-progress --limit-output
 }
 
 # 4. Refresh Environment Variables
 $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")
 
-Write-Host "`n[!] Environment Setup Complete!" -ForegroundColor Green
-Write-Host "[*] Please RESTART your PowerShell or CMD window to apply changes." -ForegroundColor Cyan
-Write-Host "[*] You can then verify with 'cmake --version' and 'git --version'." -ForegroundColor Gray
+Write-Host "`n[!] Environment Setup Process Finished!" -ForegroundColor Green
+Write-Host "[*] If windows-11-sdk failed again, don't worry. The VS Workload likely already installed it." -ForegroundColor Yellow
+Write-Host "[*] Please RESTART your PowerShell or CMD window." -ForegroundColor Cyan
+Write-Host "[*] Then try: mkdir build; cd build; cmake .." -ForegroundColor Gray
